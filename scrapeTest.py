@@ -1,8 +1,12 @@
 
+from asyncio import futures
+from threading import Lock
 import requests
 from bs4 import BeautifulSoup
 import csv
 import pandas as pd
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:98.0) Gecko/20100101 Firefox/98.0",
@@ -93,11 +97,11 @@ def scrapeProperties(url, offset, threshold, totalPages):
 
 
 
-def scrapeReviews(url, totalPages, offset):
+def scrapeReviews(mutexLock, fileName, list1, url, totalPages, offset, start, end):
     
     list2 = []
 
-    for i in range(totalPages):
+    for i in range(start, end):
 
         newUrl = url+ str(i * offset) + hotelReviewsUrlThirdPart
         r = requests.get("http://localhost:8050/render.html", params={"url":newUrl, "wait":2}, headers=HEADERS)
@@ -173,9 +177,19 @@ def scrapeReviews(url, totalPages, offset):
 
             list2.append(curList)
         
-        print(str(totalPages - i - 1) + "pages to go...")
+        print(str(i) + "page")
+
+    for i in range(len(list2)):
+        list2[i] = list1 + list2[i]
     
-    return list2
+    mutexLock.acquire()
+    with open(fileName[0:-5] + "Reviews.csv", "a") as csvfile:
+
+        csvwriter = csv.writer(csvfile)
+        csvwriter.writerows(list2)
+    mutexLock.release()
+    
+    return ""
     
     
 
@@ -192,12 +206,17 @@ def scrapePropertiesHelper(url): # Give the main city url after applying filters
         except:
             continue
 
+    
+
     scrapeProperties(url, 25, 50, maxi)
 
 
 
 
 def scrapeReviewsHelper(fileName):
+
+    mutexLock = Lock()
+
     df = pd.read_csv(fileName)
     df.columns = ["Name","Suburb","city","Star Rating","Overall Guest rating","reviewName","count_rev"]
 
@@ -211,15 +230,32 @@ def scrapeReviewsHelper(fileName):
 
         totalpages = int(spans[len(spans) - 1].text.split(" ")[1])
 
-        list2 = scrapeReviews(hotelReviewsUrlFirstPart + df.loc[i, ['reviewName']].to_string(index=False) + hotelReviewsUrlSecondPart, totalpages, 10)
-
         list1 = list(df.loc[i])
+
+        with ThreadPoolExecutor() as executor:
+            futures = []
+
+            for j in range(0, totalpages, 10):
+
+                if (j + 10 > totalpages):
+                    futures.append(executor.submit(scrapeReviews, mutexLock, fileName, list1, hotelReviewsUrlFirstPart + df.loc[i, ['reviewName']].to_string(index=False) + hotelReviewsUrlSecondPart, totalpages, 10, j, totalpages))
+                    break
+
+                futures.append(executor.submit(scrapeReviews, mutexLock, fileName, list1, hotelReviewsUrlFirstPart + df.loc[i, ['reviewName']].to_string(index=False) + hotelReviewsUrlSecondPart, totalpages, 10, j, j + 10))
+            
+            for future in concurrent.futures.as_completed(futures):
+                print(future.result())
+
+
+        # list2 = scrapeReviews(mutexLock, fileName, list1, hotelReviewsUrlFirstPart + df.loc[i, ['reviewName']].to_string(index=False) + hotelReviewsUrlSecondPart, totalpages, 10, 0, totalpages)
+
+        
         # print(url)
-        for i in range(len(list2)):
-            list2[i] = list1 + list2[i]
+        # for i in range(len(list2)):
+        #     list2[i] = list1 + list2[i]
 
-        with open(fileName[0:-5] + "Reviews.csv", "a") as csvfile:
+        # with open(fileName[0:-5] + "Reviews.csv", "a") as csvfile:
 
-            csvwriter = csv.writer(csvfile)
-            csvwriter.writerows(list2)
+        #     csvwriter = csv.writer(csvfile)
+        #     csvwriter.writerows(list2)
 
